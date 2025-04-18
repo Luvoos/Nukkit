@@ -7230,4 +7230,19 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         this.formWindows.clear();
         this.dataPacket(new ClientboundCloseFormPacket());
     }
+
+    /**
+     * Make the player select a specified hotbar slot
+     * @param slot the slot's index (0-8), corresponding to hotbar slots 1-9
+     */
+    public void setSelectedHotbarSlot(int slot) {
+        if (slot < 0 || slot > 8) {
+            return;
+        }
+        PlayerHotbarPacket pk = new PlayerHotbarPacket();
+        pk.selectHotbarSlot = true;
+        pk.selectedHotbarSlot = slot;
+        pk.windowId = 0;
+        this.dataPacket(pk);
+    }
 }
