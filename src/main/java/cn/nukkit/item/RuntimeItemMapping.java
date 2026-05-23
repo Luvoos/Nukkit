@@ -2,6 +2,7 @@ package cn.nukkit.item;
 
 import cn.nukkit.Nukkit;
 import cn.nukkit.block.Block;
+import cn.nukkit.block.BlockID;
 import cn.nukkit.item.RuntimeItems.MappingEntry;
 import cn.nukkit.level.GlobalBlockPalette;
 import cn.nukkit.nbt.NBTIO;
@@ -111,7 +112,7 @@ public class RuntimeItemMapping {
         LegacyEntry legacyEntry = this.runtime2Legacy.get(runtimeId);
         if (legacyEntry == null) {
             //throw new IllegalArgumentException("Unknown runtime2Legacy mapping: " + runtimeId);
-            log.warn("Unknown runtime2Legacy mapping: " + runtimeId);
+            log.debug("Unknown runtime2Legacy mapping: " + runtimeId); // TODO: resolve unknown recipes and enable this as warning again
             return new LegacyEntry(0, false, 0);
         }
         return legacyEntry;
@@ -174,6 +175,10 @@ public class RuntimeItemMapping {
 
                 damage = fullId & Block.DATA_MASK;
             }
+        }
+
+        if (legacyId == BlockID.RED_MUSHROOM_BLOCK || legacyId == BlockID.BROWN_MUSHROOM_BLOCK) {
+            damage = 14;
         }
 
         int count = json.has("count") ? json.get("count").getAsInt() : 1;

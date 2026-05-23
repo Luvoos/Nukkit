@@ -1,19 +1,19 @@
 package cn.nukkit.inventory.transaction;
 
+import cn.nukkit.Nukkit;
 import cn.nukkit.Player;
 import cn.nukkit.block.Block;
 import cn.nukkit.event.block.AnvilDamageEvent;
 import cn.nukkit.event.block.AnvilDamageEvent.DamageCause;
 import cn.nukkit.event.inventory.RepairItemEvent;
-import cn.nukkit.inventory.AnvilInventory;
-import cn.nukkit.inventory.FakeBlockMenu;
-import cn.nukkit.inventory.Inventory;
-import cn.nukkit.inventory.PlayerInventory;
-import cn.nukkit.inventory.transaction.action.InventoryAction;
+import cn.nukkit.inventory.*;
 import cn.nukkit.inventory.transaction.action.RepairItemAction;
+import cn.nukkit.inventory.transaction.action.InventoryAction;
 import cn.nukkit.inventory.transaction.action.SlotChangeAction;
 import cn.nukkit.item.Item;
 import cn.nukkit.item.enchantment.Enchantment;
+import cn.nukkit.nbt.tag.CompoundTag;
+import cn.nukkit.nbt.tag.Tag;
 import cn.nukkit.network.protocol.LevelEventPacket;
 import cn.nukkit.network.protocol.types.NetworkInventoryAction;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
@@ -27,21 +27,11 @@ public class RepairItemTransaction extends InventoryTransaction {
     private Item inputItem;
     private Item materialItem;
     private Item outputItem;
-    private Item outputItemCheck;
 
     private int cost;
 
     public RepairItemTransaction(Player source, List<InventoryAction> actions) {
         super(source, actions);
-
-        for (InventoryAction action : actions) {
-            if (action instanceof SlotChangeAction) {
-                SlotChangeAction slotChangeAction = (SlotChangeAction) action;
-                if (slotChangeAction.getInventory() instanceof PlayerInventory) {
-                    this.outputItemCheck = slotChangeAction.getTargetItem();
-                }
-            }
-        }
     }
 
     @Override
@@ -54,17 +44,39 @@ public class RepairItemTransaction extends InventoryTransaction {
         if (!(inventory instanceof AnvilInventory)) {
             return false;
         }
+
         AnvilInventory anvilInventory = (AnvilInventory) inventory;
-        return this.inputItem != null && this.outputItem != null && this.inputItem.equals(anvilInventory.getInputSlot(), true, true)
-                && (!this.hasMaterial() || this.materialItem.equals(anvilInventory.getMaterialSlot(), true, true))
-                && (this.outputItemCheck == null || this.inputItem.getId() == this.outputItemCheck.getId())
-                && (this.outputItemCheck == null || this.inputItem.getCount() == this.outputItemCheck.getCount())
+
+        if (this.outputItem == null || this.outputItem.isNull() || this.inputItem == null || this.inputItem.isNull()) {
+            return false;
+        }
+
+        for (InventoryAction action : actions) {
+            if (action instanceof SlotChangeAction) {
+                SlotChangeAction slotChangeAction = (SlotChangeAction) action;
+                if (!(slotChangeAction.getInventory() instanceof AnvilInventory)) {
+                    Item item = slotChangeAction.getTargetItemUnsafe();
+                    if (item != null && !item.isNull() && !this.outputItem.equals(item)) {
+                        this.invalid = true;
+                        if (Nukkit.DEBUG > 1) {
+                            source.getServer().getLogger().debug("Illegal output " + item);
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return (!this.hasMaterial() || this.materialItem.equals(anvilInventory.getMaterialSlot(), true, true))
+                && this.inputItem.equals(anvilInventory.getInputSlot(), true, true)
+                && (this.outputItem.equals(anvilInventory.getOutputSlot(), true, true) ||
+                (anvilInventory.getOutputSlot().isNull() && this.inputItem.getId() == this.outputItem.getId()))
                 && this.checkRecipeValid();
     }
 
     @Override
     public boolean execute() {
-        if (this.hasExecuted() || !this.canExecute()) {
+        if (this.hasExecuted() || !this.canExecute() || this.invalid) {
             this.source.removeAllWindows(false);
             this.sendInventories();
             return false;
@@ -72,14 +84,14 @@ public class RepairItemTransaction extends InventoryTransaction {
         AnvilInventory inventory = (AnvilInventory) getSource().getWindowById(Player.ANVIL_WINDOW_ID);
 
         if (inventory.getCost() != this.cost && !this.source.isCreative()) {
-            this.source.getServer().getLogger().debug("Got unexpected cost " + inventory.getCost() + " from " + this.source.getName() + "(expected " + this.cost + ')');
+            this.source.getServer().getLogger().debug("Got unexpected cost " + inventory.getCost() + " from " + this.source.getName() + " (expected " + this.cost + ')');
         }
 
         RepairItemEvent event = new RepairItemEvent(inventory, this.inputItem, this.outputItem, this.materialItem, this.cost, this.source);
         this.source.getServer().getPluginManager().callEvent(event);
         if (event.isCancelled()) {
-            this.source.removeAllWindows(false);
             this.sendInventories();
+            source.setNeedSendInventory(true);
             return true;
         }
 
@@ -123,25 +135,42 @@ public class RepairItemTransaction extends InventoryTransaction {
         if (!this.source.isCreative()) {
             this.source.setExperience(this.source.getExperience(), this.source.getExperienceLevel() - event.getCost());
         }
+
+        this.hasExecuted = true;
         return true;
     }
 
     @Override
     public void addAction(InventoryAction action) {
-        super.addAction(action);
         if (action instanceof RepairItemAction) {
             switch (((RepairItemAction) action).getType()) {
                 case NetworkInventoryAction.SOURCE_TYPE_ANVIL_INPUT:
+                    if (this.inputItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for inputItem");
+                        return;
+                    }
                     this.inputItem = action.getTargetItem();
                     break;
                 case NetworkInventoryAction.SOURCE_TYPE_ANVIL_RESULT:
+                    if (this.outputItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for outputItem");
+                        return;
+                    }
                     this.outputItem = action.getSourceItem();
                     break;
                 case NetworkInventoryAction.SOURCE_TYPE_ANVIL_MATERIAL:
+                    if (this.materialItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for materialItem");
+                        return;
+                    }
                     this.materialItem = action.getTargetItem();
                     break;
             }
         }
+        super.addAction(action);
     }
 
     private boolean checkRecipeValid() {
@@ -150,6 +179,7 @@ public class RepairItemTransaction extends InventoryTransaction {
 
         if (this.isMapRecipe()) {
             if (!this.matchMapRecipe()) {
+                source.getServer().getLogger().debug("failed: map recipe");
                 return false;
             }
             baseRepairCost = 0;
@@ -160,6 +190,7 @@ public class RepairItemTransaction extends InventoryTransaction {
                 int maxRepairDamage = this.inputItem.getMaxDurability() / 4;
                 int repairDamage = Math.min(this.inputItem.getDamage(), maxRepairDamage);
                 if (repairDamage <= 0) {
+                    source.getServer().getLogger().debug("failed: repair damage: " + repairDamage);
                     return false;
                 }
 
@@ -168,12 +199,14 @@ public class RepairItemTransaction extends InventoryTransaction {
                     damage = damage - repairDamage;
                     repairDamage = Math.min(damage, maxRepairDamage);
                 }
-                if (this.outputItem.getDamage() != damage) {
+                if (this.outputItem.getDamage() != damage && this.outputItem.getDamage() != damage + 1) {
+                    source.getServer().getLogger().debug("failed: durable damage: " + this.outputItem.getDamage() + " != " + damage);
                     return false;
                 }
             } else {
                 boolean consumeEnchantedBook = this.materialItem.getId() == Item.ENCHANTED_BOOK && this.materialItem.hasEnchantments();
                 if (!consumeEnchantedBook && (this.inputItem.getMaxDurability() == -1 || this.inputItem.getId() != this.materialItem.getId())) {
+                    source.getServer().getLogger().debug("failed: type");
                     return false;
                 }
 
@@ -185,6 +218,7 @@ public class RepairItemTransaction extends InventoryTransaction {
 
                     if (damage < this.inputItem.getDamage()) {
                         if (this.outputItem.getDamage() != damage) {
+                            source.getServer().getLogger().debug("failed: damage");
                             return false;
                         }
                         cost += 2;
@@ -252,20 +286,52 @@ public class RepairItemTransaction extends InventoryTransaction {
 
                 Enchantment[] outputEnchantments = this.outputItem.getEnchantments();
                 if (hasIncompatibleEnchantments && !hasCompatibleEnchantments || enchantments.size() != outputEnchantments.length) {
+                    source.getServer().getLogger().debug("failed: enchantments");
                     return false;
                 }
 
                 for (Enchantment enchantment : outputEnchantments) {
                     if (enchantments.get(enchantment.getId()) != enchantment.getLevel()) {
+                        source.getServer().getLogger().debug("failed: enchantment level");
                         return false;
                     }
                 }
+            }
+        } else {
+            CompoundTag a = this.inputItem.getNamedTag();
+            a = a == null ? new CompoundTag() : a.clone().remove("RepairCost");
+            Tag displayA = a.get("display");
+            if (displayA != null) {
+                CompoundTag tag = (CompoundTag) displayA;
+                tag.remove("Name");
+                if (tag.isEmpty()) {
+                    a.remove("display");
+                }
+            }
+
+            CompoundTag b = this.outputItem.getNamedTag();
+            b = b == null ? new CompoundTag() : b.clone().remove("RepairCost");
+            Tag displayB = b.get("display");
+            if (displayB != null) {
+                CompoundTag tag = (CompoundTag) displayB;
+                tag.remove("Name");
+                if (tag.isEmpty()) {
+                    b.remove("display");
+                }
+            }
+
+            if (!a.equals(b)) {
+                if (Nukkit.DEBUG > 1) {
+                    source.getServer().getLogger().debug("NBT check failed: input=" + a + ", output=" + b);
+                }
+                return false;
             }
         }
 
         int renameCost = 0;
         if (!this.inputItem.getCustomName().equals(this.outputItem.getCustomName())) {
             if (this.outputItem.getCustomName().length() > 30) {
+                source.getServer().getLogger().debug("failed: name length");
                 return false;
             }
             renameCost = 1;
@@ -277,6 +343,7 @@ public class RepairItemTransaction extends InventoryTransaction {
             this.cost = 39;
         }
         if (baseRepairCost < 0 || cost < 0 || cost == 0 && !this.isMapRecipe() || this.cost > 39 && !this.source.isCreative()) {
+            source.getServer().getLogger().debug("failed: cost");
             return false;
         }
 
@@ -290,7 +357,9 @@ public class RepairItemTransaction extends InventoryTransaction {
             }
         }
         if (this.outputItem.getRepairCost() != nextBaseRepairCost) {
-            this.source.getServer().getLogger().debug("Got unexpected base cost " + this.outputItem.getRepairCost() + " from " + this.source.getName() + "(expected " + nextBaseRepairCost + ')');
+            if (Nukkit.DEBUG > 1) {
+                this.source.getServer().getLogger().debug("Got unexpected base cost " + this.outputItem.getRepairCost() + " from " + this.source.getName() + "(expected " + nextBaseRepairCost + ")");
+            }
             return false;
         }
 
@@ -410,7 +479,8 @@ public class RepairItemTransaction extends InventoryTransaction {
         return this.cost;
     }
 
-    public static boolean checkForRepairItemPart(List<InventoryAction> actions) {
+    @Override
+    public boolean checkForItemPart(List<InventoryAction> actions) {
         for (InventoryAction action : actions) {
             if (action instanceof RepairItemAction) {
                 return true;

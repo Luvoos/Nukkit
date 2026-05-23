@@ -1,18 +1,18 @@
 package cn.nukkit.entity.data;
 
+import cn.nukkit.Nukkit;
 import cn.nukkit.Server;
 import cn.nukkit.nbt.stream.FastByteArrayOutputStream;
 import cn.nukkit.utils.*;
 import com.google.common.base.Preconditions;
-import com.nimbusds.jose.shaded.json.JSONObject;
-import com.nimbusds.jose.shaded.json.JSONValue;
+import com.google.gson.Gson;
 import lombok.ToString;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.*;
+import java.util.List;
 
 /**
  * @author MagicDroidX
@@ -29,6 +29,8 @@ public class Skin {
     public static final int SKIN_128_128_SIZE = 128 * 128 * PIXEL_SIZE;
     
     private static final int MAX_DATA_SIZE = 262144;
+
+    private static final Gson GSON = new Gson();
 
     public static final String GEOMETRY_CUSTOM = convertLegacyGeometryName("geometry.humanoid.custom");
     public static final String GEOMETRY_CUSTOM_SLIM = convertLegacyGeometryName("geometry.humanoid.customSlim");
@@ -86,9 +88,12 @@ public class Skin {
             return false;
         }
         try {
-            JSONObject geometry = (JSONObject) ((JSONObject) JSONValue.parse(skinResourcePatch)).get("geometry");
-            return geometry.containsKey("default") && geometry.get("default") instanceof String;
-        } catch (ClassCastException | NullPointerException e) {
+            Map<String, Object> geometry = (Map<String, Object>) GSON.fromJson(skinResourcePatch, Map.class).get("geometry");
+            if (geometry == null) {
+                return false;
+            }
+            return geometry.get("default") instanceof String;
+        } catch (ClassCastException e) {
             return false;
         }
     }
@@ -110,7 +115,9 @@ public class Skin {
 
     public void setSkinId(String skinId) {
         if (skinId == null || skinId.trim().isEmpty()) {
-            Server.getInstance().getLogger().debug("Skin ID cannot be empty! ", new Throwable(""));
+            if (Nukkit.DEBUG > 1) {
+                Server.getInstance().getLogger().debug("Skin ID cannot be empty! ", new Throwable(""));
+            }
             return;
         }
         this.skinId = skinId;

@@ -3,6 +3,7 @@ package cn.nukkit.network.protocol;
 import cn.nukkit.entity.data.Skin;
 import lombok.ToString;
 
+import java.awt.*;
 import java.util.UUID;
 
 /**
@@ -42,6 +43,7 @@ public class PlayerListPacket extends DataPacket {
                     this.putBoolean(entry.isTeacher);
                     this.putBoolean(entry.isHost);
                     this.putBoolean(entry.isSubClient);
+                    this.putLInt(entry.color.getRGB());
                 }
                 for (Entry entry : this.entries) { // WTF Mojang
                     this.putBoolean(entry.skin.isTrusted());
@@ -72,6 +74,7 @@ public class PlayerListPacket extends DataPacket {
         public boolean isTeacher;
         public boolean isHost;
         public boolean isSubClient;
+        public Color color;
 
         public Entry(UUID uuid) {
             this.uuid = uuid;
@@ -82,11 +85,16 @@ public class PlayerListPacket extends DataPacket {
         }
 
         public Entry(UUID uuid, long entityId, String name, Skin skin, String xboxUserId) {
+            this(uuid, entityId, name, skin, xboxUserId, Color.WHITE);
+        }
+
+        public Entry(UUID uuid, long entityId, String name, Skin skin, String xboxUserId, Color color) {
             this.uuid = uuid;
             this.entityId = entityId;
             this.name = name;
             this.skin = skin;
             this.xboxUserId = xboxUserId == null ? "" : xboxUserId;
+            this.color = color;
         }
     }
 }

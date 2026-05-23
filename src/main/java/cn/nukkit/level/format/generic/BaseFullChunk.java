@@ -1,6 +1,7 @@
 package cn.nukkit.level.format.generic;
 
 import cn.nukkit.Player;
+import cn.nukkit.block.BlockID;
 import cn.nukkit.block.BlockLayer;
 import cn.nukkit.blockentity.BlockEntity;
 import cn.nukkit.blockentity.PersistentDataContainerBlockEntity;
@@ -308,8 +309,25 @@ public abstract class BaseFullChunk implements FullChunk, ChunkManager {
                 return h;
             }
         }
-        for (int y = this.provider.getLevel().getMaxBlockY(); y >= this.provider.getLevel().getMinBlockY(); --y) {
-            if (getBlockId(x, y, z) != 0x00) {
+
+        // TODO: This needs a proper fix
+        int minY = 0;
+        int maxY = 127; // Don't go out of bounds when nether chunk is unloading
+        LevelProvider providerTemp = this.provider;
+        if (providerTemp != null) {
+            Level levelTemp = providerTemp.getLevel();
+            if (levelTemp != null) {
+                minY = levelTemp.getMinBlockY();
+                maxY = levelTemp.getMaxBlockY();
+            } else {
+                cache = false;
+            }
+        } else {
+            cache = false;
+        }
+
+        for (int y = maxY; y >= minY; --y) {
+            if (getBlockId(x, y, z) != BlockID.AIR) {
                 if (cache) {
                     this.setHeightMap(x, z, y);
                 }

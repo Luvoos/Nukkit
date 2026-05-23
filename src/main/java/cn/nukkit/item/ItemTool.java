@@ -42,6 +42,7 @@ public abstract class ItemTool extends Item implements ItemDurable {
     public static final int DURABILITY_FISHING_ROD = 385;
     public static final int DURABILITY_CARROT_ON_A_STICK = 26;
     public static final int DURABILITY_WARPED_FUNGUS_ON_A_STICK = 100;
+    public static final int DURABILITY_MACE = 500;
 
     public ItemTool(int id) {
         this(id, 0, 1, UNKNOWN_STR);
@@ -76,17 +77,26 @@ public abstract class ItemTool extends Item implements ItemDurable {
                 block.getToolType() == ItemTool.TYPE_HOE && this.isHoe() ||
                 block.getToolType() == ItemTool.TYPE_SWORD && this.isSword() ||
                 block.getToolType() == ItemTool.TYPE_SHEARS && this.isShears()
-                ) {
+        ) {
             this.meta++;
-        } else if (this.isSword() && block.getHardness() > 0) {
-            this.meta += 2;
-        } else if (this.isHoe()) {
-            if (block.getId() == GRASS || block.getId() == DIRT) {
-                this.meta++;
-            }
-        } else {
-            this.meta++;
+            return true;
         }
+
+        if (this.isSword() && block.getHardness() > 0) {
+            this.meta += 2;
+            return true;
+        }
+
+        if (this.isHoe() && ((block.getId() == GRASS || block.getId() == DIRT))) {
+            this.meta++;
+            return true;
+        }
+
+        if (block.getId() == TALL_GRASS || block.getId() == FLOWER || block.getId() == DOUBLE_PLANT) {
+            return true;
+        }
+
+        this.meta++;
         return true;
     }
 

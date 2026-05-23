@@ -34,7 +34,7 @@ public class BlockDeepslate extends BlockSolidMeta {
 
     @Override
     public double getResistance() {
-        return 6;
+        return 30;
     }
 
     @Override
@@ -101,6 +101,6 @@ public class BlockDeepslate extends BlockSolidMeta {
 
     @Override
     public BlockColor getColor() {
-        return BlockColor.DEEPSLATE_GRAY;
+        return BlockColor.DEEPSLATE_GRAY_BLOCK_COLOR;
     }
 }

@@ -4,9 +4,11 @@ import cn.nukkit.Player;
 import cn.nukkit.item.Item;
 import cn.nukkit.item.ItemBlock;
 import cn.nukkit.item.ItemTool;
+import cn.nukkit.item.enchantment.Enchantment;
 import cn.nukkit.math.AxisAlignedBB;
 import cn.nukkit.math.BlockFace;
 import cn.nukkit.math.SimpleAxisAlignedBB;
+import cn.nukkit.utils.BlockColor;
 import cn.nukkit.utils.Faceable;
 
 public abstract class BlockAmethystBud extends BlockTransparentMeta implements Faceable {
@@ -108,6 +110,14 @@ public abstract class BlockAmethystBud extends BlockTransparentMeta implements F
 
     @Override
     public Item[] getDrops(Item item) {
+        if (item.isPickaxe() && item.hasEnchantment(Enchantment.ID_SILK_TOUCH)) {
+            return new Item[]{this.toItem()};
+        }
         return new Item[0];
+    }
+
+    @Override
+    public BlockColor getColor() {
+        return BlockColor.PURPLE_BLOCK_COLOR;
     }
 }

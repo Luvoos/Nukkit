@@ -1,5 +1,6 @@
 package cn.nukkit.inventory.transaction.action;
 
+import cn.nukkit.Nukkit;
 import cn.nukkit.Player;
 import cn.nukkit.blockentity.BlockEntity;
 import cn.nukkit.blockentity.BlockEntityContainer;
@@ -8,6 +9,7 @@ import cn.nukkit.entity.Entity;
 import cn.nukkit.inventory.*;
 import cn.nukkit.inventory.transaction.InventoryTransaction;
 import cn.nukkit.item.Item;
+import lombok.ToString;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -15,6 +17,7 @@ import java.util.Set;
 /**
  * @author CreeperFace
  */
+@ToString
 public class SlotChangeAction extends InventoryAction {
 
     protected Inventory inventory;
@@ -51,28 +54,47 @@ public class SlotChangeAction extends InventoryAction {
      * @return valid
      */
     public boolean isValid(Player source) {
-        if (inventory == null || source == null || source.closed) {
+        if (inventory == null || source.closed) {
+            if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid null");
             return false;
         }
-
         if (!source.isCreative() && !(inventory instanceof PlayerUIComponent) && !(inventory instanceof PlayerUIInventory) && !inventory.getViewers().contains(source)) {
-            source.getServer().getLogger().debug(source.getName() + ": got SlotChangeAction but player is not a viewer of " + inventory);
+            if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid viewers " + inventory);
             return false;
         }
-
-        if (inventory.getHolder() instanceof BlockEntityContainer && !((BlockEntity) inventory.getHolder()).closed && (source.distanceSquared((BlockEntity) inventory.getHolder()) > 4096 || !source.getLevel().equals(((BlockEntity) inventory.getHolder()).getLevel()))) {
-            source.getServer().getLogger().debug(source.getName() + ": got SlotChangeAction but player is too far away from the holder of " + inventory);
+        if (inventory instanceof PlayerEnderChestInventory && source.getViewingEnderChest() == null) {
+            if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid no ec open " + inventory);
             return false;
         }
-
-        if (inventory.getHolder() != source && inventory.getHolder() instanceof Entity && !((Entity) inventory.getHolder()).closed && (source.distanceSquared((Entity) inventory.getHolder()) > 4096 || !source.getLevel().equals(((Entity) inventory.getHolder()).getLevel()))) {
-            source.getServer().getLogger().debug(source.getName() + ": got SlotChangeAction but player is too far away from the holder of " + inventory);
-            return false;
+        if (inventory.getHolder() instanceof BlockEntityContainer) {
+            if (((BlockEntity) inventory.getHolder()).closed) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid closed " + inventory);
+                return false;
+            } else if (((BlockEntity) inventory.getHolder()).chunk == null || ((BlockEntity) inventory.getHolder()).chunk.getProvider() == null) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid chunk provider " + inventory);
+                return false;
+            } else if (((BlockEntity) inventory.getHolder()).distanceSquared(source) > 4096 || !((BlockEntity) inventory.getHolder()).getLevel().equals(source.getLevel())) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid container distance " + inventory);
+                return false;
+            }
+        }
+        if (inventory.getHolder() != source && inventory.getHolder() instanceof Entity) {
+            if (((Entity) inventory.getHolder()).closed) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid closed " + inventory);
+                return false;
+            } else if (((Entity) inventory.getHolder()).chunk == null || ((Entity) inventory.getHolder()).chunk.getProvider() == null) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid chunk provider " + inventory);
+                return false;
+            } else if (((Entity) inventory.getHolder()).distanceSquared(source) > 4096 || !((Entity) inventory.getHolder()).getLevel().equals(source.getLevel())) {
+                if (Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid entity distance " + inventory);
+                return false;
+            }
         }
 
         Item check = inventory.getItem(this.inventorySlot);
-
-        return check.equalsExact(this.sourceItem);
+        boolean valid = (check.getId() == Item.AIR && this.sourceItem.getId() == Item.AIR) || check.equalsExact(this.sourceItem);
+        if (!valid && Nukkit.DEBUG > 1) source.getServer().getLogger().debug("!isValid " + inventory);
+        return valid;
     }
 
     /**

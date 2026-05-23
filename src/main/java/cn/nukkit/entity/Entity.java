@@ -5,6 +5,8 @@ import cn.nukkit.Server;
 import cn.nukkit.block.Block;
 import cn.nukkit.block.BlockFire;
 import cn.nukkit.block.BlockID;
+import cn.nukkit.block.BlockPointedDripstone;
+import cn.nukkit.block.properties.DripstoneThickness;
 import cn.nukkit.entity.custom.CustomEntity;
 import cn.nukkit.entity.custom.EntityDefinition;
 import cn.nukkit.entity.custom.EntityManager;
@@ -12,6 +14,7 @@ import cn.nukkit.entity.data.*;
 import cn.nukkit.entity.item.EntityItem;
 import cn.nukkit.entity.item.EntityMinecartEmpty;
 import cn.nukkit.entity.item.EntityVehicle;
+import cn.nukkit.entity.projectile.EntityArrow;
 import cn.nukkit.event.Event;
 import cn.nukkit.event.entity.*;
 import cn.nukkit.event.entity.EntityDamageEvent.DamageCause;
@@ -19,6 +22,7 @@ import cn.nukkit.event.player.PlayerInteractEvent;
 import cn.nukkit.event.player.PlayerInteractEvent.Action;
 import cn.nukkit.event.player.PlayerTeleportEvent;
 import cn.nukkit.item.Item;
+import cn.nukkit.item.ItemArrow;
 import cn.nukkit.item.ItemID;
 import cn.nukkit.item.enchantment.Enchantment;
 import cn.nukkit.level.GameRule;
@@ -72,7 +76,9 @@ public abstract class Entity extends Location implements Metadatable {
     public static final int DATA_FLAGS = 0;
     public static final int DATA_HEALTH = 1; //int (minecart/boat)
     public static final int DATA_VARIANT = 2; //int
-    public static final int DATA_COLOR = 3, DATA_COLOUR = DATA_COLOR; //byte
+    public static final int DATA_COLOR = 3; //byte
+    @Deprecated
+    public static final int DATA_COLOUR = DATA_COLOR;
     public static final int DATA_NAMETAG = 4; //string
     public static final int DATA_OWNER_EID = 5; //long
     public static final int DATA_TARGET_EID = 6; //long
@@ -220,7 +226,8 @@ public abstract class Entity extends Location implements Metadatable {
     public static final int DATA_FLAG_CRITICAL = 13;
     public static final int DATA_FLAG_CAN_SHOW_NAMETAG = 14;
     public static final int DATA_FLAG_ALWAYS_SHOW_NAMETAG = 15;
-    public static final int DATA_FLAG_IMMOBILE = 16, DATA_FLAG_NO_AI = DATA_FLAG_IMMOBILE;
+    public static final int DATA_FLAG_IMMOBILE = 16;
+    public static final int DATA_FLAG_NO_AI = DATA_FLAG_IMMOBILE;
     public static final int DATA_FLAG_SILENT = 17;
     public static final int DATA_FLAG_WALLCLIMBING = 18;
     public static final int DATA_FLAG_CAN_CLIMB = 19;
@@ -327,6 +334,13 @@ public abstract class Entity extends Location implements Metadatable {
     public static final int DATA_FLAG_BODY_ROTATION_AXIS_ALIGNED = 120;
     public static final int DATA_FLAG_COLLIDABLE = 121;
     public static final int DATA_FLAG_WASD_AIR_CONTROLLED = 122;
+    public static final int DATA_FLAG_DOES_SERVER_AUTH_ONLY_DISMOUNT = 123;
+    public static final int DATA_FLAG_BODY_ROTATION_ALWAYS_FOLLOWS_HEAD = 124;
+    public static final int DATA_FLAG_CAN_USE_VERTICAL_MOVEMENT_ACTION = 125;
+    public static final int DATA_FLAG_BODY_ROTATION_LOCKED_TO_VEHICLE = 126;
+    public static final int DATA_FLAG_USES_LEGACY_FRICTION = 127;
+    public static final int DATA_FLAG_USES_UNIFORM_AIR_DRAG = 128;
+    public static final int DATA_FLAG_NAMEPLATE_DEPTH_TESTED = 129;
 
     public static final double STEP_CLIP_MULTIPLIER = 0.4;
 
@@ -380,11 +394,6 @@ public abstract class Entity extends Location implements Metadatable {
     public double lastPitch;
     public double lastHeadYaw;
 
-    @Deprecated
-    public double PitchDelta;
-    @Deprecated
-    public double YawDelta;
-
     public double entityCollisionReduction; // Higher than 0.9 will result a fast collisions
     public AxisAlignedBB boundingBox;
     public boolean onGround;
@@ -428,6 +437,7 @@ public abstract class Entity extends Location implements Metadatable {
     public boolean justCreated;
     public boolean fireProof;
     public boolean invulnerable;
+    private boolean collidable;
 
     // Allow certain entities to be ticked only when a nearby block is updated or the entity is moving already
     // 1 = has pending update, 3 = update on block update only, 5 = update on block update + schedule occasional updates
@@ -573,9 +583,9 @@ public abstract class Entity extends Location implements Metadatable {
         ListTag<FloatTag> rotationList = this.namedTag.getList("Rotation", FloatTag.class);
         ListTag<DoubleTag> motionList = this.namedTag.getList("Motion", DoubleTag.class);
         float correctedYaw = rotationList.get(0).data;
-        if (!(correctedYaw >= 0 && correctedYaw <= 360)) correctedYaw = 0;
+        if (!(correctedYaw >= -360 && correctedYaw <= 360)) correctedYaw = 0;
         float correctedPitch = rotationList.get(1).data;
-        if (!(correctedPitch >= 0 && correctedPitch <= 360)) correctedPitch = 0;
+        if (!(correctedPitch >= -360 && correctedPitch <= 360)) correctedPitch = 0;
         this.setPositionAndRotation(
                 this.temporalVector.setComponents(
                         posList.get(0).data,
@@ -849,9 +859,8 @@ public abstract class Entity extends Location implements Metadatable {
     }
 
     public void removeEffect(int effectId, EntityPotionEffectEvent.Cause cause) {
-        if (this.effects.containsKey(effectId)) {
-            Effect effect = this.effects.get(effectId);
-
+        Effect effect = this.effects.get(effectId);
+        if (effect != null) {
             if (cause != null) {
                 EntityPotionEffectEvent event =
                         new EntityPotionEffectEvent(this, effect, null, EntityPotionEffectEvent.Action.REMOVED, cause);
@@ -914,42 +923,40 @@ public abstract class Entity extends Location implements Metadatable {
         }
     }
 
-    protected static void addEffectFromTippedArrow(Entity entity, Effect effect, float damage) {
-        if (effect == null) {
-            return;
-        }
+    protected static void addEffectFromTippedArrow(Entity entity, EntityArrow arrow, float damage) {
+        for (Effect effect : new ItemArrow(arrow.getData()).getEffects()) {
+            Effect oldEffect = entity.effects.get(effect.getId());
 
-        Effect oldEffect = entity.effects.get(effect.getId());
+            EntityPotionEffectEvent event = new EntityPotionEffectEvent(
+                    entity,
+                    oldEffect,
+                    effect,
+                    oldEffect == null ? EntityPotionEffectEvent.Action.ADDED : EntityPotionEffectEvent.Action.CHANGED,
+                    EntityPotionEffectEvent.Cause.ARROW);
 
-        EntityPotionEffectEvent event = new EntityPotionEffectEvent(
-                entity,
-                oldEffect,
-                effect,
-                oldEffect == null ? EntityPotionEffectEvent.Action.ADDED : EntityPotionEffectEvent.Action.CHANGED,
-                EntityPotionEffectEvent.Cause.ARROW);
+            entity.getServer().getPluginManager().callEvent(event);
+            if (event.isCancelled()) {
+                continue;
+            }
 
-        entity.getServer().getPluginManager().callEvent(event);
-        if (event.isCancelled()) {
-            return;
-        }
-
-        switch (effect.getId()) {
-            case Effect.HEALING:
-                if (entity.isAlive()) { // Avoid dupes
-                    entity.heal(new EntityRegainHealthEvent(entity, 4 * (effect.getAmplifier() + 1), EntityRegainHealthEvent.CAUSE_MAGIC));
-                }
-                break;
-            case Effect.HARMING:
-                float attackDamage = (effect.getAmplifier() < 1 ? 6 : 12) - damage;
-                if (attackDamage > 0) {
-                    EntityDamageEvent ev = new EntityDamageEvent(entity, DamageCause.MAGIC, attackDamage);
-                    entity.attack(ev);
-                }
-                break;
-            default:
-                effect.add(entity);
-                entity.effects.put(effect.getId(), effect);
-                entity.recalculateEffectColor();
+            switch (effect.getId()) {
+                case Effect.HEALING:
+                    if (entity.isAlive()) { // Avoid dupes
+                        entity.heal(new EntityRegainHealthEvent(entity, 4 * (effect.getAmplifier() + 1), EntityRegainHealthEvent.CAUSE_MAGIC));
+                    }
+                    break;
+                case Effect.HARMING:
+                    float attackDamage = (effect.getAmplifier() < 1 ? 6 : 12) - damage;
+                    if (attackDamage > 0) {
+                        EntityDamageEvent ev = new EntityDamageEvent(entity, DamageCause.MAGIC, attackDamage);
+                        entity.attack(ev);
+                    }
+                    break;
+                default:
+                    effect.add(entity);
+                    entity.effects.put(effect.getId(), effect);
+                    entity.recalculateEffectColor();
+            }
         }
     }
 
@@ -1329,6 +1336,7 @@ public abstract class Entity extends Location implements Metadatable {
             AnimatePacket animate = new AnimatePacket();
             animate.action = AnimatePacket.Action.CRITICAL_HIT;
             animate.eid = this.getId();
+            animate.data = 55f;
 
             this.getLevel().addChunkPacket(this.getChunkX(), this.getChunkZ(), animate);
             this.getLevel().addLevelSoundEvent(this, LevelSoundEventPacket.SOUND_ATTACK_STRONG);
@@ -1487,7 +1495,7 @@ public abstract class Entity extends Location implements Metadatable {
     }
 
     protected boolean checkObstruction(double x, double y, double z) {
-        if (this.noClip || this.level.getCollisionCubes(this, this.boundingBox, false).length == 0) {
+        if (this.noClip || !this.level.hasCollision(this, this.boundingBox, false)) {
             return false;
         }
 
@@ -1996,6 +2004,8 @@ public abstract class Entity extends Location implements Metadatable {
                         damage -= (damage * 0.5f);
                     } else if (floor == BlockID.SLIME_BLOCK || floor == BlockID.COBWEB || floor == BlockID.SCAFFOLDING || floor == BlockID.SWEET_BERRY_BUSH) {
                         damage = 0;
+                    } else if (down instanceof BlockPointedDripstone && ((BlockPointedDripstone) down).getThickness() == DripstoneThickness.TIP) {
+                        damage = Math.max(damage, (float) Math.floor(Math.ceil(fallDistance * 2 - 2) - 3 - (this.hasEffect(Effect.JUMP) ? this.getEffect(Effect.JUMP).getAmplifier() + 1 : 0)));
                     }
 
                     if (damage > 0) {
@@ -2419,7 +2429,7 @@ public abstract class Entity extends Location implements Metadatable {
     }
 
     public boolean setPositionAndRotation(Vector3 pos, double yaw, double pitch) {
-        return this.setPositionAndRotation(pos, yaw, pitch, yaw);
+        return this.setPositionAndRotation(pos, yaw, pitch, 0);
     }
 
     public boolean setPositionAndRotation(Vector3 pos, double yaw, double pitch, double headYaw) {
@@ -2432,7 +2442,7 @@ public abstract class Entity extends Location implements Metadatable {
     }
 
     public void setRotation(double yaw, double pitch) {
-        this.setRotation(yaw, pitch, yaw);
+        this.setRotation(yaw, pitch, 0);
     }
 
     public void setRotation(double yaw, double pitch, double headYaw) {
@@ -2938,5 +2948,16 @@ public abstract class Entity extends Location implements Metadatable {
      */
     public boolean ignoredAsSaveReason() {
         return false;
+    }
+
+    public void setCollidable(boolean collidable) {
+        if (this.collidable != collidable) {
+            this.collidable = collidable;
+            setDataFlag(DATA_FLAGS_EXTENDED, DATA_FLAG_COLLIDABLE);
+        }
+    }
+
+    public boolean isCollidable() {
+        return this.collidable;
     }
 }

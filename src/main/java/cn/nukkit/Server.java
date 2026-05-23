@@ -18,6 +18,7 @@ import cn.nukkit.entity.weather.EntityLightning;
 import cn.nukkit.event.HandlerList;
 import cn.nukkit.event.level.LevelInitEvent;
 import cn.nukkit.event.level.LevelLoadEvent;
+import cn.nukkit.event.server.BatchPacketsEvent;
 import cn.nukkit.event.server.PlayerDataSerializeEvent;
 import cn.nukkit.event.server.QueryRegenerateEvent;
 import cn.nukkit.event.server.ServerStopEvent;
@@ -50,14 +51,11 @@ import cn.nukkit.nbt.tag.CompoundTag;
 import cn.nukkit.nbt.tag.DoubleTag;
 import cn.nukkit.nbt.tag.FloatTag;
 import cn.nukkit.nbt.tag.ListTag;
-import cn.nukkit.network.BatchingHelper;
 import cn.nukkit.network.Network;
 import cn.nukkit.network.RakNetInterface;
 import cn.nukkit.network.SourceInterface;
-import cn.nukkit.network.protocol.BiomeDefinitionListPacket;
-import cn.nukkit.network.protocol.DataPacket;
-import cn.nukkit.network.protocol.PlayerListPacket;
-import cn.nukkit.network.protocol.ProtocolInfo;
+import cn.nukkit.network.encryption.EncryptionUtils;
+import cn.nukkit.network.protocol.*;
 import cn.nukkit.network.query.QueryHandler;
 import cn.nukkit.network.rcon.RCON;
 import cn.nukkit.permission.BanEntry;
@@ -88,12 +86,19 @@ import org.iq80.leveldb.DB;
 import org.iq80.leveldb.Options;
 import org.iq80.leveldb.impl.Iq80DBFactory;
 
-import java.io.*;
-import java.net.*;
+import java.awt.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
@@ -194,7 +199,6 @@ public class Server {
     private Watchdog watchdog;
     private final DB nameLookup;
     private PlayerDataSerializer playerDataSerializer;
-    private final BatchingHelper batchingHelper;
     private final Set<String> ignoredPackets = new HashSet<>();
 
     /**
@@ -428,6 +432,10 @@ public class Server {
         log.info(this.getLanguage().translateString("language.selected", new String[]{getLanguage().getName(), getLanguage().getLang()}));
         log.info(getLanguage().translateString("nukkit.server.start", TextFormat.AQUA + this.getVersion() + TextFormat.RESET));
 
+        log.debug("Setting up auth environment...");
+        //noinspection ResultOfMethodCallIgnored
+        EncryptionUtils.getMojangPublicKey();
+
         Object poolSize = this.getConfig("settings.async-workers", "auto");
         if (!(poolSize instanceof Integer)) {
             try {
@@ -442,8 +450,6 @@ public class Server {
         this.scheduler = new ServerScheduler();
 
         this.console.setExecutingCommands(true); // Scheduler needs to be ready
-
-        this.batchingHelper = new BatchingHelper();
 
         if (this.getPropertyBoolean("enable-rcon", false)) {
             try {
@@ -485,6 +491,8 @@ public class Server {
         EntityManager.get();
         //noinspection ResultOfMethodCallIgnored
         BiomeDefinitionListPacket.getCachedPacket();
+        //noinspection ResultOfMethodCallIgnored
+        TrimDataPacket.getCachedPacket();
 
         // Convert legacy data before plugins get the chance to mess with it
         try {
@@ -699,23 +707,33 @@ public class Server {
     }
 
     public static void broadcastPacket(Collection<Player> players, DataPacket packet) {
-        packet.tryEncode();
-
         for (Player player : players) {
             player.dataPacket(packet);
         }
     }
 
     public static void broadcastPacket(Player[] players, DataPacket packet) {
-        packet.tryEncode();
-
         for (Player player : players) {
             player.dataPacket(packet);
         }
     }
 
+    @Deprecated
     public void batchPackets(Player[] players, DataPacket[] packets) {
-        this.batchingHelper.batchPackets(this, players, packets);
+        for (DataPacket packet : packets) {
+            for (Player player : players) {
+                sendPacketOrdered(player, packet);
+            }
+        }
+    }
+
+    void sendPacketOrdered(Player player, DataPacket packet) {
+        //noinspection deprecation
+        if (new BatchPacketsEvent(new Player[]{player}, new DataPacket[]{packet}, true).call().isCancelled()) {
+            return;
+        }
+
+        player.getNetworkSession().sendPacket(packet);
     }
 
     /**
@@ -882,9 +900,6 @@ public class Server {
             this.getLogger().debug("Closing console...");
             this.consoleThread.interrupt();
 
-            this.getLogger().debug("Closing BatchingHelper...");
-            this.batchingHelper.shutdown();
-
             this.getLogger().debug("Stopping network interfaces...");
             for (SourceInterface interfaz : this.network.getInterfaces()) {
                 interfaz.shutdown();
@@ -1002,18 +1017,13 @@ public class Server {
         }
     }
 
-    public void onPlayerCompleteLoginSequence(Player player) {
-        this.playerList.put(player.getUniqueId(), player);
-        this.updatePlayerListData(player.getUniqueId(), player.getId(), player.getDisplayName(), player.getSkin(), player.getLoginChainData().getXUID());
-    }
-
     public void addPlayer(InetSocketAddress socketAddress, Player player) {
         this.players.put(socketAddress, player);
     }
 
     public void addOnlinePlayer(Player player) {
         this.playerList.put(player.getUniqueId(), player);
-        this.updatePlayerListData(player.getUniqueId(), player.getId(), player.getDisplayName(), player.getSkin(), player.getLoginChainData().getXUID());
+        player.updatePlayerListData(false);
     }
 
     public void removeOnlinePlayer(Player player) {
@@ -1042,10 +1052,14 @@ public class Server {
     }
 
     public void updatePlayerListData(UUID uuid, long entityId, String name, Skin skin, String xboxUserId, Player[] players) {
+        this.updatePlayerListData(new PlayerListPacket.Entry(uuid, entityId, name, skin, xboxUserId, Color.WHITE), players);
+    }
+
+    public void updatePlayerListData(PlayerListPacket.Entry playerListEntry, Player[] players) {
         PlayerListPacket pk = new PlayerListPacket();
         pk.type = PlayerListPacket.TYPE_ADD;
-        pk.entries = new PlayerListPacket.Entry[]{new PlayerListPacket.Entry(uuid, entityId, name, skin, xboxUserId)};
-        this.batchPackets(players, new DataPacket[]{pk}); // This is sent "directly" so it always gets through before possible TYPE_REMOVE packet for NPCs etc.
+        pk.entries = new PlayerListPacket.Entry[]{playerListEntry};
+        Server.broadcastPacket(players, pk);
     }
 
     public void updatePlayerListData(UUID uuid, long entityId, String name, Skin skin, String xboxUserId, Collection<Player> players) {
@@ -1083,13 +1097,14 @@ public class Server {
                         p.getId(),
                         p.getDisplayName(),
                         p.getSkin(),
-                        p.getLoginChainData().getXUID()))
+                        p.getLoginChainData().getXUID(),
+                        p.getLocatorBarColor()))
                 .toArray(PlayerListPacket.Entry[]::new);
         player.dataPacket(pk);
     }
 
     public void sendRecipeList(Player player) {
-        player.dataPacket(CraftingManager.packet);
+        player.dataPacket(craftingManager.getCachedPacket());
     }
 
     private void checkTickUpdates(int currentTick) {
@@ -2353,7 +2368,17 @@ public class Server {
      */
     public int getPropertyInt(String variable, Integer defaultValue) {
         Object value = this.properties.get(variable);
-        return value == null || (value instanceof String && ((String) value).isEmpty()) ? defaultValue : Integer.parseInt(String.valueOf(value));
+        if (value == null) {
+            value = defaultValue;
+        }
+        if (value instanceof Integer) {
+            return (Integer) value;
+        }
+        String trimmed = String.valueOf(value).trim();
+        if (trimmed.isEmpty()) {
+            return defaultValue;
+        }
+        return Integer.parseInt(trimmed);
     }
 
     /**
@@ -2392,7 +2417,7 @@ public class Server {
         if (value instanceof Boolean) {
             return (Boolean) value;
         }
-        switch (String.valueOf(value)) {
+        switch (String.valueOf(value).trim().toLowerCase(Locale.ROOT)) {
             case "on":
             case "true":
             case "1":
@@ -2409,7 +2434,7 @@ public class Server {
      * @param value value
      */
     public void setPropertyBoolean(String variable, boolean value) {
-        this.properties.set(variable, value ? "1" : "0");
+        this.properties.set(variable, value);
         this.properties.save();
     }
 
@@ -2636,6 +2661,7 @@ public class Server {
         Entity.registerEntity("FishingHook", EntityFishingHook.class);
         Entity.registerEntity("EnderEye", EntityEnderEye.class);
         Entity.registerEntity("AreaEffectCloud", EntityAreaEffectCloud.class);
+        Entity.registerEntity("WindCharge", EntityWindCharge.class);
         //Monsters
         Entity.registerEntity("Blaze", EntityBlaze.class);
         Entity.registerEntity("Creeper", EntityCreeper.class);
@@ -2720,6 +2746,12 @@ public class Server {
         Entity.registerEntity("Camel", EntityCamel.class);
         Entity.registerEntity("Sniffer", EntitySniffer.class);
         Entity.registerEntity("Armadillo", EntityArmadillo.class);
+        Entity.registerEntity("HappyGhast", EntityHappyGhast.class);
+        Entity.registerEntity("CopperGolem", EntityCopperGolem.class);
+        Entity.registerEntity("Nautilus", EntityNautilus.class);
+        Entity.registerEntity("ZombieNautilus", EntityZombieNautilus.class);
+        Entity.registerEntity("Parched", EntityParched.class);
+        Entity.registerEntity("CamelHusk", EntityCamelHusk.class);
         //Vehicles
         Entity.registerEntity("MinecartRideable", EntityMinecartEmpty.class);
         Entity.registerEntity("MinecartChest", EntityMinecartChest.class);
@@ -2883,6 +2915,7 @@ public class Server {
         this.viewDistance = this.getPropertyInt("view-distance", 10);
         this.port = this.getPropertyInt("server-port", 19132);
         this.ip = this.getPropertyString("server-ip", "0.0.0.0");
+        if (this.ip.trim().isEmpty()) this.ip = "0.0.0.0";
         this.spawnRadius = this.getPropertyInt("spawn-protection", 16);
 
         this.setAutoSave(this.getPropertyBoolean("auto-save", true));

@@ -59,7 +59,7 @@ public class BlockRedstoneLamp extends BlockSolid {
                 return 0;
             }
             if (this.level.isBlockPowered(this)) {
-                this.level.setBlock(this, Block.get(LIT_REDSTONE_LAMP), false, false);
+                this.level.setBlock(this, Block.get(LIT_REDSTONE_LAMP), false, true);
                 return 1;
             }
         }
@@ -76,6 +76,6 @@ public class BlockRedstoneLamp extends BlockSolid {
 
     @Override
     public BlockColor getColor() {
-        return BlockColor.AIR_BLOCK_COLOR;
+        return BlockColor.ORANGE_TERRACOTA_BLOCK_COLOR;
     }
 }

@@ -26,6 +26,7 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import lombok.extern.log4j.Log4j2;
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory;
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption;
+import org.cloudburstmc.netty.channel.raknet.config.RakServerCookieMode;
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRateLimiter;
 
 import java.lang.reflect.Constructor;
@@ -71,7 +72,7 @@ public class RakNetInterface implements AdvancedSourceInterface {
                 .channelFactory(RakChannelFactory.server(transport.datagramChannel))
                 .group(group)
                 .option(RakChannelOption.RAK_GUID, this.serverId)
-                .option(RakChannelOption.RAK_SEND_COOKIE, true)
+                .option(RakChannelOption.RAK_SERVER_COOKIE_MODE, RakServerCookieMode.ACTIVE)
                 .childOption(RakChannelOption.RAK_ORDERING_CHANNELS, 1)
                 .handler(new ChannelInitializer<Channel>() {
                     @Override
@@ -202,7 +203,8 @@ public class RakNetInterface implements AdvancedSourceInterface {
         String[] names = name.split("!@#"); // Split double names within the program
         String motd = Utils.rtrim(names[0].replace(";", "\\;"), '\\');
         String subMotd = names.length > 1 ? Utils.rtrim(names[1].replace(";", "\\;"), '\\') : "";
-        StringJoiner joiner = new StringJoiner(";")
+        String port = Integer.toString(this.server.getPort());
+        StringJoiner joiner = new StringJoiner(";", "", ";")
                 .add("MCPE")
                 .add(motd)
                 .add(Integer.toString(ProtocolInfo.CURRENT_PROTOCOL))
@@ -211,8 +213,10 @@ public class RakNetInterface implements AdvancedSourceInterface {
                 .add(Integer.toString(info.getMaxPlayerCount()))
                 .add(Long.toString(this.serverId))
                 .add(subMotd)
-                .add(Server.getGamemodeString(this.server.getDefaultGamemode(), true))
-                .add("1");
+                .add(this.server.getDefaultGamemode() == 1 ? "Creative" : "Survival")
+                .add("1") // not nintendo limited
+                .add(port) // ipv4 port
+                .add(port); // ipv6 port
 
         byte[] advertisement = joiner.toString().getBytes(StandardCharsets.UTF_8);
 

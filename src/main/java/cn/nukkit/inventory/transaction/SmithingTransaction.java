@@ -1,11 +1,13 @@
 package cn.nukkit.inventory.transaction;
 
+import cn.nukkit.Nukkit;
 import cn.nukkit.Player;
 import cn.nukkit.event.inventory.SmithItemEvent;
 import cn.nukkit.inventory.Inventory;
 import cn.nukkit.inventory.SmithingInventory;
 import cn.nukkit.inventory.transaction.action.CreativeInventoryAction;
 import cn.nukkit.inventory.transaction.action.InventoryAction;
+import cn.nukkit.inventory.transaction.action.SlotChangeAction;
 import cn.nukkit.inventory.transaction.action.SmithingItemAction;
 import cn.nukkit.item.Item;
 import cn.nukkit.item.ItemID;
@@ -20,6 +22,7 @@ public class SmithingTransaction extends InventoryTransaction {
     private Item equipmentItem;
     private Item ingredientItem;
     private Item outputItem;
+    protected Item templateItem;
 
     public SmithingTransaction(Player source, List<InventoryAction> actions) {
         super(source, actions);
@@ -27,17 +30,39 @@ public class SmithingTransaction extends InventoryTransaction {
 
     @Override
     public void addAction(InventoryAction action) {
-        super.addAction(action);
         if (action instanceof SmithingItemAction) {
             switch (((SmithingItemAction) action).getType()) {
                 case 0: // input
+                    if (this.equipmentItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for equipmentItem");
+                        return;
+                    }
                     this.equipmentItem = action.getTargetItem();
                     break;
                 case 1: // ingredient
+                    if (this.ingredientItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for ingredientItem");
+                        return;
+                    }
                     this.ingredientItem = action.getTargetItem();
                     break;
                 case 2: // result
+                    if (this.outputItem != null) {
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for outputItem");
+                        return;
+                    }
                     this.outputItem = action.getSourceItem();
+                    break;
+                case 3: // template
+                    if (this.templateItem != null && !this.templateItem.equals(action.getTargetItemUnsafe())) { // "hack"
+                        this.invalid = true;
+                        source.getServer().getLogger().debug("Duplicate addAction for templateItem");
+                        return;
+                    }
+                    this.templateItem = action.getTargetItem();
                     break;
             }
         } else if (action instanceof CreativeInventoryAction) {
@@ -45,35 +70,63 @@ public class SmithingTransaction extends InventoryTransaction {
             if (creativeAction.getActionType() == 0
                     && creativeAction.getSourceItemUnsafe().isNull()
                     && !creativeAction.getTargetItemUnsafe().isNull() && creativeAction.getTargetItemUnsafe().getId() == ItemID.NETHERITE_INGOT) {
+                if (this.ingredientItem != null) {
+                    this.invalid = true;
+                    source.getServer().getLogger().debug("Duplicate addAction for ingredientItem");
+                    return;
+                }
                 this.ingredientItem = action.getTargetItem();
             }
         }
+        super.addAction(action);
     }
 
     @Override
     public boolean canExecute() {
+        if (!super.canExecute()) {
+            return false;
+        }
+
         Inventory inventory = getSource().getWindowById(Player.SMITHING_WINDOW_ID);
         if (!(inventory instanceof SmithingInventory)) {
             return false;
         }
+
         SmithingInventory smithingInventory = (SmithingInventory) inventory;
-        if (outputItem == null || outputItem.isNull() ||
-                ((equipmentItem == null || equipmentItem.isNull()) && (ingredientItem == null || ingredientItem.isNull()))) {
+
+        if (this.outputItem == null || this.outputItem.isNull() || this.equipmentItem == null || this.equipmentItem.isNull()) {
             return false;
         }
 
-        Item air = Item.get(0);
-        Item equipment = equipmentItem != null ? equipmentItem : air;
-        Item ingredient = ingredientItem != null ? ingredientItem : air;
+        for (InventoryAction action : actions) {
+            if (action instanceof SlotChangeAction) {
+                SlotChangeAction slotChangeAction = (SlotChangeAction) action;
+                if (!(slotChangeAction.getInventory() instanceof SmithingInventory)) {
+                    Item item = slotChangeAction.getTargetItemUnsafe();
+                    if (item != null && !item.isNull() && !this.outputItem.equals(item)) {
+                        this.invalid = true;
+                        if (Nukkit.DEBUG > 1) {
+                            source.getServer().getLogger().debug("Illegal output " + item);
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
 
-        return equipment.equals(smithingInventory.getEquipment(), true, true)
+        Item air = Item.get(0);
+        Item ingredient = ingredientItem != null ? ingredientItem : air;
+        Item template = templateItem != null ? templateItem : air;
+
+        return equipmentItem.equals(smithingInventory.getEquipment(), true, true)
                 && ingredient.equals(smithingInventory.getIngredient(), true, true)
+                && template.equals(smithingInventory.getTemplate(), true, true)
                 && outputItem.equals(smithingInventory.getResult(), true, true);
     }
 
     @Override
     public boolean execute() {
-        if (this.hasExecuted() || !this.canExecute()) {
+        if (this.hasExecuted() || !this.canExecute() || this.invalid) {
             this.source.removeAllWindows(false);
             this.sendInventories();
             return false;
@@ -83,8 +136,8 @@ public class SmithingTransaction extends InventoryTransaction {
         SmithItemEvent event = new SmithItemEvent(inventory, this.equipmentItem, this.outputItem, this.ingredientItem, this.source);
         this.source.getServer().getPluginManager().callEvent(event);
         if (event.isCancelled()) {
-            this.source.removeAllWindows(false);
             this.sendInventories();
+            source.setNeedSendInventory(true);
             return true;
         }
 
@@ -96,9 +149,8 @@ public class SmithingTransaction extends InventoryTransaction {
             }
         }
 
-        if (inventory != null) {
-            inventory.sendContents(source);
-        }
+
+        this.hasExecuted = true;
         return true;
     }
 
@@ -114,7 +166,15 @@ public class SmithingTransaction extends InventoryTransaction {
         return this.outputItem;
     }
 
-    public static boolean checkForItemPart(List<InventoryAction> actions) {
-        return actions.stream().anyMatch(it-> it instanceof SmithingItemAction);
+    public static boolean isIn(List<InventoryAction> actions) {
+        for (InventoryAction action : actions) {
+            if (action instanceof SmithingItemAction) return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean checkForItemPart(List<InventoryAction> actions) {
+        return isIn(actions);
     }
 }

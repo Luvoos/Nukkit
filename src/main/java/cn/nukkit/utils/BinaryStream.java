@@ -1,6 +1,7 @@
 package cn.nukkit.utils;
 
 import cn.nukkit.block.Block;
+import cn.nukkit.block.BlockID;
 import cn.nukkit.entity.Attribute;
 import cn.nukkit.entity.data.Skin;
 import cn.nukkit.item.*;
@@ -597,6 +598,219 @@ public class BinaryStream {
         }
     }
 
+    public void putNetworkItemStackDescriptor(Item item) {
+        int id = item.getId();
+        int meta = item.getDamage();
+        boolean isBlock = item instanceof ItemBlock;
+        boolean isDurable = item instanceof ItemDurable;
+
+        RuntimeEntry runtimeEntry = null;
+        if (id != Item.AIR) {
+            runtimeEntry = RuntimeItems.getMapping().toRuntime(id, meta);
+        }
+
+        int runtimeId = runtimeEntry == null ? 0 : runtimeEntry.getRuntimeId();
+        int damage = isBlock || isDurable || runtimeEntry == null || runtimeEntry.isHasDamage() ? 0 : meta;
+
+        this.putLShort(runtimeId);
+        this.putLShort(item.getCount());
+        this.putUnsignedVarInt(damage);
+
+        boolean hasNetId = id != Item.AIR;
+        this.putBoolean(hasNetId); // hasNetId
+        if (hasNetId) {
+            this.putUnsignedVarInt(0); // netIdVariant ItemStackNetId
+            this.putVarInt(1); // netId 1 = Item is present
+        }
+
+        Block block = isBlock && id != Item.AIR ? item.getBlockUnsafe() : null;
+        int blockRuntimeId = block == null ? 0 : GlobalBlockPalette.getOrCreateRuntimeId(block.getId(), block.getDamage());
+        this.putUnsignedVarInt(blockRuntimeId);
+
+        if (id == Item.AIR) {
+            this.putUnsignedVarInt(0); // No user date
+            return;
+        }
+
+        ByteBuf userDataBuf = ByteBufAllocator.DEFAULT.ioBuffer();
+        try (LittleEndianByteBufOutputStream stream = new LittleEndianByteBufOutputStream(userDataBuf)) {
+            if (isDurable && runtimeEntry != null && !runtimeEntry.isHasDamage()) {
+                byte[] nbt = item.getCompoundTag();
+                CompoundTag tag;
+                if (nbt == null || nbt.length == 0) {
+                    tag = new CompoundTag();
+                } else {
+                    tag = NBTIO.read(nbt, ByteOrder.LITTLE_ENDIAN);
+                }
+                if (tag.contains("Damage")) {
+                    tag.put("__DamageConflict__", tag.removeAndGet("Damage"));
+                }
+                tag.putInt("Damage", meta);
+                stream.writeShort(-1);
+                stream.writeByte(1); // Hardcoded in current version
+                stream.write(NBTIO.write(tag, ByteOrder.LITTLE_ENDIAN));
+            } else if (item.hasCompoundTag()) {
+                stream.writeShort(-1);
+                stream.writeByte(1); // Hardcoded in current version
+                stream.write(item.getCompoundTag());
+            } else {
+                userDataBuf.writeShortLE(0);
+            }
+
+            List<String> canPlaceOn = extractStringList(item, "CanPlaceOn");
+            stream.writeInt(canPlaceOn.size());
+            for (String string : canPlaceOn) {
+                stream.writeUTF(string);
+            }
+
+            List<String> canDestroy = extractStringList(item, "CanDestroy");
+            stream.writeInt(canDestroy.size());
+            for (String string : canDestroy) {
+                stream.writeUTF(string);
+            }
+
+            if (id == ItemID.SHIELD) {
+                stream.writeLong(0);
+            }
+
+            byte[] bytes = new byte[userDataBuf.readableBytes()];
+            userDataBuf.readBytes(bytes);
+            putByteArray(bytes);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to write item user data", e);
+        } finally {
+            userDataBuf.release();
+        }
+    }
+
+    public Item getNetworkItemStackDescriptor() {
+        int id = 0;
+        short runtimeId = (short) this.getLShort(); // signed short
+        int count = this.getLShort();
+        int damage = (int) this.getUnsignedVarInt();
+
+        LegacyEntry legacyEntry = null;
+
+        if (runtimeId != 0) {
+            legacyEntry = RuntimeItems.getMapping().fromRuntime(runtimeId);
+
+            id = legacyEntry.getLegacyId();
+
+            if (legacyEntry.isHasDamage()) {
+                damage = legacyEntry.getDamage();
+            }
+        }
+
+        if (this.getBoolean()) { // hasNetId
+            this.getUnsignedVarInt(); // netIdVariant
+            this.getVarInt(); // netId
+        }
+
+        int blockRuntimeId = (int) this.getUnsignedVarInt();
+
+        if (id != Item.AIR && id < 256 && id != 166 && !(id == -212 && legacyEntry.getDamage() == 0) && !legacyEntry.isHasDamage() && (id == BlockID.RED_MUSHROOM_BLOCK || id == BlockID.BROWN_MUSHROOM_BLOCK)) { // ItemBlock
+            int fullId = GlobalBlockPalette.getLegacyFullId(blockRuntimeId);
+            if (fullId != -1) {
+                damage = fullId & 0x3f;
+            }
+        }
+
+        byte[] nbt = new byte[0];
+        String[] canPlace = null;
+        String[] canBreak = null;
+
+        byte[] bytes = this.getByteArray();
+
+        if (bytes.length != 0) {
+            ByteBuf buf = ByteBufAllocator.DEFAULT.ioBuffer(bytes.length);
+            buf.writeBytes(bytes);
+
+            try (LittleEndianByteBufInputStream stream = new LittleEndianByteBufInputStream(buf)) {
+                int nbtSize = stream.readShort();
+
+                CompoundTag compoundTag = null;
+                if (nbtSize > 0) {
+                    compoundTag = NBTIO.read(stream, ByteOrder.LITTLE_ENDIAN);
+                } else if (nbtSize == -1) {
+                    int tagCount = stream.readUnsignedByte();
+                    if (tagCount != 1) throw new IllegalArgumentException("Expected 1 tag but got " + tagCount);
+                    compoundTag = NBTIO.read(stream, ByteOrder.LITTLE_ENDIAN);
+                }
+
+                if (compoundTag != null && !compoundTag.getAllTags().isEmpty()) {
+                    if (!legacyEntry.isHasDamage() && compoundTag.contains("Damage")) {
+                        damage = compoundTag.getInt("Damage");
+                        compoundTag.remove("Damage");
+                    }
+                    if (compoundTag.contains("__DamageConflict__")) {
+                        compoundTag.put("Damage", compoundTag.removeAndGet("__DamageConflict__"));
+                    }
+                    if (!compoundTag.isEmpty()) {
+                        nbt = NBTIO.write(compoundTag, ByteOrder.LITTLE_ENDIAN);
+                    }
+                }
+
+                int canPlaceCount = stream.readInt();
+                if (canPlaceCount > 4096) {
+                    throw new RuntimeException("Too many CanPlaceOn blocks: " + canPlaceCount);
+                }
+
+                canPlace = new String[canPlaceCount];
+                for (int i = 0; i < canPlace.length; i++) {
+                    canPlace[i] = stream.readUTF();
+                }
+
+                int canBreakCount = stream.readInt();
+                if (canBreakCount > 4096) {
+                    throw new RuntimeException("Too many CanDestroy blocks: " + canBreakCount);
+                }
+
+                canBreak = new String[canBreakCount];
+                for (int i = 0; i < canBreak.length; i++) {
+                    canBreak[i] = stream.readUTF();
+                }
+
+                if (id == ItemID.SHIELD) {
+                    stream.readLong();
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Unable to read item user data", e);
+            } finally {
+                buf.release();
+            }
+        }
+
+        Item item = Item.get(id, damage, count, nbt);
+
+        if ((canBreak != null && canBreak.length > 0) || (canPlace != null && canPlace.length > 0)) {
+            CompoundTag namedTag = item.getNamedTag();
+            if (namedTag == null) {
+                namedTag = new CompoundTag();
+            }
+
+            if (canBreak != null && canBreak.length > 0) {
+                ListTag<StringTag> listTag = new ListTag<>("CanDestroy");
+                for (String blockName : canBreak) {
+                    listTag.add(new StringTag("", blockName));
+                }
+                namedTag.put("CanDestroy", listTag);
+            }
+
+            if (canPlace != null && canPlace.length > 0) {
+                ListTag<StringTag> listTag = new ListTag<>("CanPlaceOn");
+                for (String blockName : canPlace) {
+                    listTag.add(new StringTag("", blockName));
+                }
+                namedTag.put("CanPlaceOn", listTag);
+            }
+
+            item.setNamedTag(namedTag);
+        }
+
+        return item;
+    }
+
+    @Deprecated
     public Item getRecipeIngredient() {
         int runtimeId = this.getVarInt();
         if (runtimeId == 0) {
@@ -722,7 +936,7 @@ public class BinaryStream {
     }
 
     public BlockVector3 getBlockVector3() {
-        return new BlockVector3(this.getVarInt(), (int) this.getUnsignedVarInt(), this.getVarInt());
+        return new BlockVector3(this.getVarInt(), this.getVarInt(), this.getVarInt());
     }
 
     public BlockVector3 getSignedBlockPosition() {
@@ -741,7 +955,7 @@ public class BinaryStream {
 
     public void putBlockVector3(int x, int y, int z) {
         this.putVarInt(x);
-        this.putUnsignedVarInt(Integer.toUnsignedLong(y)); // we have even negative coordinates
+        this.putVarInt(y);
         this.putVarInt(z);
     }
 
@@ -763,16 +977,16 @@ public class BinaryStream {
         return new Vector2f(this.getLFloat(), this.getLFloat());
     }
 
-    public void putGameRules(GameRules gameRules) {
+    public void putGameRules(GameRules gameRules, boolean startGame) {
         Map<GameRule, GameRules.Value> rulesToSend = new HashMap<>(gameRules.getGameRules());
         this.putUnsignedVarInt(rulesToSend.size());
         rulesToSend.forEach((gameRule, value) -> {
             putString(gameRule.getName().toLowerCase(Locale.ROOT));
-            value.write(this);
+            value.write(this, startGame);
         });
     }
 
-    public void putGameRulesMap(Map<GameRule, GameRules.Value> allGameRules) {
+    public void putGameRulesMap(Map<GameRule, GameRules.Value> allGameRules, boolean startGame) {
         Map<GameRule, GameRules.Value> rulesToSend = new HashMap<>();
         allGameRules.forEach((gameRule, value) -> {
             if (gameRule == GameRule.NATURAL_REGENERATION) {
@@ -784,7 +998,7 @@ public class BinaryStream {
         this.putUnsignedVarInt(rulesToSend.size());
         rulesToSend.forEach((gameRule, value) -> {
             putString(gameRule.getName().toLowerCase(Locale.ROOT));
-            value.write(this);
+            value.write(this, startGame);
         });
     }
 
@@ -915,5 +1129,14 @@ public class BinaryStream {
             this.putBoolean(experimentData.isEnabled());
         }
         this.putBoolean(!experiments.isEmpty());
+    }
+
+    public <T> void putOptionalNull(T object, BiConsumer<BinaryStream, T> consumer) {
+        if (object != null) {
+            this.putBoolean(true);
+            consumer.accept(this, object);
+        } else {
+            this.putBoolean(false);
+        }
     }
 }

@@ -21,8 +21,9 @@ public class TextPacket extends DataPacket {
     public static final byte TYPE_SYSTEM = 6;
     public static final byte TYPE_WHISPER = 7;
     public static final byte TYPE_ANNOUNCEMENT = 8;
-    public static final byte TYPE_OBJECT = 9;
-    public static final byte TYPE_OBJECT_WHISPER = 10;
+    public static final byte TYPE_OBJECT_WHISPER = 9;
+    public static final byte TYPE_OBJECT = 10;
+    public static final byte TYPE_OBJECT_ANNOUNCEMENT = 11;
 
     public byte type;
     public String source = "";
@@ -35,65 +36,92 @@ public class TextPacket extends DataPacket {
 
     @Override
     public void decode() {
-        this.type = (byte) getByte();
         this.isLocalized = this.getBoolean() || type == TYPE_TRANSLATION;
-        switch (type) {
-            case TYPE_CHAT:
-            case TYPE_WHISPER:
-            case TYPE_ANNOUNCEMENT:
-                this.source = this.getString();
-            case TYPE_RAW:
-            case TYPE_TIP:
-            case TYPE_SYSTEM:
-            case TYPE_OBJECT:
-            case TYPE_OBJECT_WHISPER:
+
+        switch (this.getByte()) {
+            case 0: // MessageOnly
+                this.type = (byte) getByte();
                 this.message = this.getString();
                 break;
-
-            case TYPE_TRANSLATION:
-            case TYPE_POPUP:
-            case TYPE_JUKEBOX_POPUP:
+            case 1: // AuthorAndMessage
+                this.type = (byte) getByte();
+                this.source = this.getString();
+                this.message = this.getString();
+                break;
+            case 2: // MessageAndParams
+                this.type = (byte) getByte();
                 this.message = this.getString();
                 int paramCount = (int) this.getUnsignedVarInt();
-                this.parameters = new String[Math.min(paramCount, 128)];
+                if (paramCount > 4) {
+                    throw new IllegalArgumentException("Parameter List maxItems is 4");
+                }
+                this.parameters = new String[paramCount];
                 for (int i = 0; i < this.parameters.length; i++) {
                     this.parameters[i] = this.getString();
                 }
+                break;
+            default:
+                throw new IllegalArgumentException("Not oneOf<MessageOnly, AuthorAndMessage, MessageAndParams>");
         }
+
         this.xboxUserId = this.getString();
         this.platformChatId = this.getString();
-        this.filteredMessage = this.getString();
+
+        if (this.getBoolean()) {
+            this.filteredMessage = this.getString();
+        }
     }
 
     @Override
     public void encode() {
         this.reset();
-        this.putByte(this.type);
+
         this.putBoolean(this.isLocalized || type == TYPE_TRANSLATION);
+
+        // 1.21.130 doesn't allow empty messages
+        if (this.message.isEmpty()) {
+            this.message = " ";
+        }
+
         switch (this.type) {
-            case TYPE_CHAT:
-            case TYPE_WHISPER:
-            case TYPE_ANNOUNCEMENT:
-                this.putString(this.source);
             case TYPE_RAW:
             case TYPE_TIP:
             case TYPE_SYSTEM:
             case TYPE_OBJECT:
             case TYPE_OBJECT_WHISPER:
+            case TYPE_OBJECT_ANNOUNCEMENT:
+                this.putByte((byte) 0); // MessageOnly
+                this.putByte(this.type);
+                this.putString(this.message);
+                break;
+
+            case TYPE_CHAT:
+            case TYPE_WHISPER:
+            case TYPE_ANNOUNCEMENT:
+                this.putByte((byte) 1); // AuthorAndMessage
+                this.putByte(this.type);
+                this.putString(this.source);
                 this.putString(this.message);
                 break;
 
             case TYPE_TRANSLATION:
             case TYPE_POPUP:
             case TYPE_JUKEBOX_POPUP:
+                this.putByte((byte) 2); // MessageAndParams
+                this.putByte(this.type);
                 this.putString(this.message);
                 this.putUnsignedVarInt(this.parameters.length);
                 for (String parameter : this.parameters) {
                     this.putString(parameter);
                 }
         }
+
         this.putString(this.xboxUserId);
         this.putString(this.platformChatId);
-        this.putString(this.filteredMessage);
+
+        this.putBoolean(!this.filteredMessage.isEmpty());
+        if (!this.filteredMessage.isEmpty()) {
+            this.putString(this.filteredMessage);
+        }
     }
 }

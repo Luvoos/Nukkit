@@ -30,11 +30,6 @@ public class BlockSlabBrickDeepslate extends BlockSlab {
     }
     
     @Override
-    public double getResistance() {
-        return 6;
-    }
-    
-    @Override
     public boolean canHarvestWithHand() {
         return false;
     }
@@ -51,6 +46,6 @@ public class BlockSlabBrickDeepslate extends BlockSlab {
     
     @Override
     public BlockColor getColor() {
-        return BlockColor.DEEPSLATE_GRAY;
+        return BlockColor.DEEPSLATE_GRAY_BLOCK_COLOR;
     }
 }

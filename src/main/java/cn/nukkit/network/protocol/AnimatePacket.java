@@ -14,25 +14,30 @@ public class AnimatePacket extends DataPacket {
 
     public long eid;
     public Action action;
+    public float data;
+    @Deprecated
     public float rowingTime;
 
     @Override
     public void decode() {
-        this.action = Action.fromId(this.getVarInt());
+        this.action = Action.fromId(this.getByte());
+        if (this.action == null) {
+            this.action = Action.NO_ACTION;
+        }
         this.eid = getEntityRuntimeId();
-        if (this.action == Action.ROW_RIGHT || this.action == Action.ROW_LEFT) {
-            this.rowingTime = this.getLFloat();
+        this.data = this.getLFloat();
+        if (this.getBoolean()) {
+            this.getString(); // Swing source
         }
     }
 
     @Override
     public void encode() {
         this.reset();
-        this.putVarInt(this.action.getId());
+        this.putByte((byte) this.action.getId());
         this.putEntityRuntimeId(this.eid);
-        if (this.action == Action.ROW_RIGHT || this.action == Action.ROW_LEFT) {
-            this.putLFloat(this.rowingTime);
-        }
+        this.putLFloat(this.data);
+        this.putBoolean(false); // Swing source (optional)
     }
 
     @Override

@@ -58,7 +58,7 @@ public class StartGamePacket extends DataPacket {
     public int spawnY;
     public int spawnZ;
     public boolean hasAchievementsDisabled = true;
-    public boolean worldEditor;
+    public int editorWorldType;
     public int dayCycleStopTime = -1; // -1 = not stopped, any positive value = stopped
     public int eduEditionOffer = 0;
     public boolean hasEduFeaturesEnabled;
@@ -88,7 +88,6 @@ public class StartGamePacket extends DataPacket {
     public String worldName;
     public String premiumWorldTemplateId = "";
     public boolean isTrial;
-    public boolean isMovementServerAuthoritative = true;
     public boolean isInventoryServerAuthoritative;
     public long currentTick;
     public int enchantmentSeed;
@@ -127,7 +126,7 @@ public class StartGamePacket extends DataPacket {
         this.putVarInt(this.difficulty);
         this.putBlockVector3(this.spawnX, this.spawnY, this.spawnZ);
         this.putBoolean(this.hasAchievementsDisabled);
-        this.putBoolean(this.worldEditor);
+        this.putVarInt(this.editorWorldType);
         this.putBoolean(false); // isCreatedInEditor
         this.putBoolean(false); // isExportedFromEditor
         this.putVarInt(this.dayCycleStopTime);
@@ -143,7 +142,7 @@ public class StartGamePacket extends DataPacket {
         this.putVarInt(this.platformBroadcastIntent);
         this.putBoolean(this.commandsEnabled);
         this.putBoolean(this.isTexturePacksRequired);
-        this.putGameRules(this.gameRules);
+        this.putGameRules(this.gameRules, true);
         this.putExperiments(this.experiments);
         this.putBoolean(this.bonusChest);
         this.putBoolean(this.hasStartWithMapEnabled);
@@ -169,15 +168,11 @@ public class StartGamePacket extends DataPacket {
         this.putBoolean(false); // Experimental Gameplay
         this.putByte(this.chatRestrictionLevel);
         this.putBoolean(this.disablePlayerInteractions);
-        this.putString(""); // ServerId
-        this.putString(""); // WorldId
-        this.putString(""); // ScenarioId
         /* Level settings end */
         this.putString(this.levelId);
         this.putString(this.worldName);
         this.putString(this.premiumWorldTemplateId);
         this.putBoolean(this.isTrial);
-        this.putVarInt(this.isMovementServerAuthoritative ? 1 : 0); // 2 - rewind
         this.putVarInt(0); // RewindHistorySize
         this.putBoolean(true); // isServerAuthoritativeBlockBreaking
         this.putLLong(this.currentTick);
@@ -192,5 +187,12 @@ public class StartGamePacket extends DataPacket {
         this.putBoolean(this.clientSideGenerationEnabled);
         this.putBoolean(false); // blockIdsAreHashed
         this.putBoolean(true); // isServerAuthSounds
+        this.putBoolean(false); // no server join info
+        /* ServerTelemetryData start */
+        this.putString("");
+        this.putString("");
+        this.putString("");
+        this.putString("");
+        /* ServerTelemetryData end */
     }
 }

@@ -9,8 +9,8 @@ import cn.nukkit.utils.Utils;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.regex.Pattern;
@@ -22,8 +22,8 @@ public class JavaPluginLoader implements PluginLoader {
 
     private final Server server;
 
-    private final Map<String, Class> classes = new HashMap<>();
-    private final Map<String, PluginClassLoader> classLoaders = new HashMap<>();
+    private final Map<String, Class<?>> classes = new ConcurrentHashMap<>();
+    private final Map<String, PluginClassLoader> classLoaders = new ConcurrentHashMap<>();
 
     public JavaPluginLoader(Server server) {
         this.server = server;
@@ -31,12 +31,16 @@ public class JavaPluginLoader implements PluginLoader {
 
     @Override
     public Plugin loadPlugin(File file) throws Exception {
+        if (!server.isPrimaryThread()) {
+            server.getLogger().warning("Plugin loaded asynchronously: " + file.getName());
+        }
+
         PluginDescription description = this.getPluginDescription(file);
         if (description != null) {
             this.server.getLogger().info(this.server.getLanguage().translateString("nukkit.plugin.load", description.getFullName()));
             File dataFolder = new File(file.getParentFile(), description.getName());
             if (dataFolder.exists() && !dataFolder.isDirectory()) {
-                throw new IllegalStateException("Projected dataFolder '" + dataFolder.toString() + "' for " + description.getName() + " exists and is not a directory");
+                throw new IllegalStateException("Projected dataFolder '" + dataFolder + "' for " + description.getName() + " exists and is not a directory");
             }
 
             String className = description.getMain();
@@ -44,7 +48,7 @@ public class JavaPluginLoader implements PluginLoader {
             this.classLoaders.put(description.getName(), classLoader);
             PluginBase plugin;
             try {
-                Class javaClass = classLoader.loadClass(className);
+                Class<?> javaClass = classLoader.loadClass(className);
 
                 if (!PluginBase.class.isAssignableFrom(javaClass)) {
                     throw new PluginException("Main class `" + description.getMain() + "' does not extend PluginBase");

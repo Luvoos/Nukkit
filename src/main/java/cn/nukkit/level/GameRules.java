@@ -40,6 +40,7 @@ public class GameRules {
         gameRules.gameRules.put(FREEZE_DAMAGE, new Value<>(Type.BOOLEAN, true));
         gameRules.gameRules.put(FUNCTION_COMMAND_LIMIT, new Value<>(Type.INTEGER, 10000));
         gameRules.gameRules.put(KEEP_INVENTORY, new Value<>(Type.BOOLEAN, false));
+        gameRules.gameRules.put(LOCATOR_BAR, new Value<>(Type.BOOLEAN, true));
         gameRules.gameRules.put(MAX_COMMAND_CHAIN_LENGTH, new Value<>(Type.INTEGER, 65536));
         gameRules.gameRules.put(MOB_GRIEFING, new Value<>(Type.BOOLEAN, true));
         gameRules.gameRules.put(NATURAL_REGENERATION, new Value<>(Type.BOOLEAN, true));
@@ -174,29 +175,33 @@ public class GameRules {
     public enum Type {
         UNKNOWN {
             @Override
-            void write(BinaryStream pk, Value value) {
+            void write(BinaryStream pk, Value value, boolean startGame) {
             }
         },
         BOOLEAN {
             @Override
-            void write(BinaryStream pk, Value value) {
+            void write(BinaryStream pk, Value value, boolean startGame) {
                 pk.putBoolean(value.getValueAsBoolean());
             }
         },
         INTEGER {
             @Override
-            void write(BinaryStream pk, Value value) {
-                pk.putUnsignedVarInt(value.getValueAsInteger());
+            void write(BinaryStream pk, Value value, boolean startGame) {
+                if (startGame) {
+                    pk.putVarInt(value.getValueAsInteger());
+                } else {
+                    pk.putLInt(value.getValueAsInteger());
+                }
             }
         },
         FLOAT {
             @Override
-            void write(BinaryStream pk, Value value) {
+            void write(BinaryStream pk, Value value, boolean startGame) {
                 pk.putLFloat(value.getValueAsFloat());
             }
         };
 
-        abstract void write(BinaryStream pk, Value value);
+        abstract void write(BinaryStream pk, Value value, boolean startGame);
     }
 
     public static class Value<T> {
@@ -249,10 +254,10 @@ public class GameRules {
             return (Float) value;
         }
 
-        public void write(BinaryStream pk) {
+        public void write(BinaryStream pk, boolean startGame) {
             pk.putBoolean(this.canBeChanged);
             pk.putUnsignedVarInt(type.ordinal());
-            type.write(pk, this);
+            type.write(pk, this, startGame);
         }
     }
 }

@@ -170,7 +170,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
 
     private final Long2ObjectOpenHashMap<Player> players = new Long2ObjectOpenHashMap<>();
 
-    public final Long2ObjectOpenHashMap<Entity> entities = new Long2ObjectOpenHashMap<>();
+    private final Long2ObjectOpenHashMap<Entity> entities = new Long2ObjectOpenHashMap<>();
 
     public final Long2ObjectOpenHashMap<Entity> updateEntities = new Long2ObjectOpenHashMap<>();
 
@@ -1137,6 +1137,8 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
         int randRange = 3 + chunksPerLoader / 30;
         randRange = Math.min(randRange, this.chunkTickRadius);
 
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+
         for (ChunkLoader loader : this.loaders.values()) {
             int chunkX = NukkitMath.floorDouble(loader.getX()) >> 4;
             int chunkZ = NukkitMath.floorDouble(loader.getZ()) >> 4;
@@ -1145,8 +1147,8 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             int existingLoaders = Math.max(0, this.chunkTickList.getOrDefault(index, 0));
             this.chunkTickList.put(index, existingLoaders + 1);
             for (int chunk = 0; chunk < chunksPerLoader; ++chunk) {
-                int dx = ThreadLocalRandom.current().nextInt(randRange << 1) - randRange;
-                int dz = ThreadLocalRandom.current().nextInt(randRange << 1) - randRange;
+                int dx = random.nextInt(randRange << 1) - randRange;
+                int dz = random.nextInt(randRange << 1) - randRange;
                 long hash = Level.chunkHash(dx + chunkX, dz + chunkZ);
                 if (!this.chunkTickList.containsKey(hash) && provider.isChunkLoaded(hash)) {
                     this.chunkTickList.put(hash, -1);
@@ -1195,7 +1197,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
                         if (!(section instanceof EmptyChunkSection)) {
                             int Y = section.getY();
                             for (int i = 0; i < tickSpeed; ++i) {
-                                int n = ThreadLocalRandom.current().nextInt();
+                                int n = random.nextInt();
                                 int x = n & 0xF;
                                 int z = n >> 8 & 0xF;
                                 int y = n >> 16 & 0xF;
@@ -1213,7 +1215,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
                     for (int Y = 0; Y < 8 && (Y < 3 || blockTest != 0); ++Y) {
                         blockTest = 0;
                         for (int i = 0; i < tickSpeed; ++i) {
-                            int n = ThreadLocalRandom.current().nextInt();
+                            int n = random.nextInt();
                             int x = n & 0xF;
                             int z = n >> 8 & 0xF;
                             int y = n >> 16 & 0xF;
@@ -1448,6 +1450,10 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
     }
 
     public boolean hasCollisionBlocks(Entity entity, AxisAlignedBB bb) {
+        return hasCollisionBlocks(entity, bb, false);
+    }
+
+    private boolean hasCollisionBlocks(Entity entity, AxisAlignedBB bb, boolean checkCanPassThrough) {
         int minX = NukkitMath.floorDouble(bb.getMinX());
         int minY = NukkitMath.floorDouble(bb.getMinY());
         int minZ = NukkitMath.floorDouble(bb.getMinZ());
@@ -1459,7 +1465,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             for (int x = minX; x <= maxX; ++x) {
                 for (int y = minY; y <= maxY; ++y) {
                     Block block = this.getBlock(entity.chunk, x, y, z, false);
-                    if (block != null && block.getId() != 0 && block.collidesWithBB(bb)) {
+                    if ((!checkCanPassThrough || !block.canPassThrough()) && block.collidesWithBB(bb)) {
                         return true;
                     }
                 }
@@ -1526,22 +1532,8 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
     }
 
     public boolean hasCollision(Entity entity, AxisAlignedBB bb, boolean entities) {
-        int minX = NukkitMath.floorDouble(bb.getMinX());
-        int minY = NukkitMath.floorDouble(bb.getMinY());
-        int minZ = NukkitMath.floorDouble(bb.getMinZ());
-        int maxX = NukkitMath.ceilDouble(bb.getMaxX());
-        int maxY = NukkitMath.ceilDouble(bb.getMaxY());
-        int maxZ = NukkitMath.ceilDouble(bb.getMaxZ());
-
-        for (int z = minZ; z <= maxZ; ++z) {
-            for (int x = minX; x <= maxX; ++x) {
-                for (int y = minY; y <= maxY; ++y) {
-                    Block block = this.getBlock(entity.chunk, x, y, z, false);
-                    if (!block.canPassThrough() && block.collidesWithBB(bb)) {
-                        return true;
-                    }
-                }
-            }
+        if (this.hasCollisionBlocks(entity, bb, true)) {
+            return true;
         }
 
         if (entities) {
@@ -1662,14 +1654,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             fullState = 0;
         }
 
-        Block block = Block.fullList[fullState].clone();
-
-        block.x = x;
-        block.y = y;
-        block.z = z;
-        block.level = this;
-        block.setLayer(layer);
-        return block;
+        return Block.get(fullState, this, x, y, z, layer);
     }
 
     // Use only if getting correct block is not critical
@@ -1690,16 +1675,8 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             fullState = 0;
         }
 
-        Block block = Block.fullList[fullState].clone();
-
-        block.x = x;
-        block.y = y;
-        block.z = z;
-        block.level = this;
-        block.setLayer(layer);
-        return block;
+        return Block.get(fullState, this, x, y, z, layer);
     }
-
 
     public void updateAllLight(Vector3 pos) {
         this.updateBlockSkyLight((int) pos.x, (int) pos.y, (int) pos.z);
@@ -1724,11 +1701,11 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             Map.Entry<Long, Set<Integer>> entry = iter.next();
             iter.remove();
             long index = entry.getKey();
+            BaseFullChunk chunk = getChunk(getHashX(index), getHashZ(index), false);
             Set<Integer> blocks = entry.getValue();
 
             for (int blockHash : blocks) {
                 Vector3 pos = getBlockXYZ(index, blockHash, this.getDimensionData());
-                BaseFullChunk chunk = getChunk(((int) pos.x) >> 4, ((int) pos.z) >> 4, false);
 
                 if (chunk != null) {
                     int lcx = ((int) pos.x) & 0xF;
@@ -1736,7 +1713,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
                     int oldLevel = chunk.getBlockLight(lcx, ((int) pos.y), lcz);
                     int newLevel = Block.getBlockLight(chunk.getBlockId(lcx, ((int) pos.y), lcz));
                     if (oldLevel != newLevel) {
-                        this.setBlockLightAt(((int) pos.x), ((int) pos.y), ((int) pos.z), newLevel);
+                        chunk.setBlockLight(((int) pos.x) & 0x0f, ((int) pos.y), ((int) pos.z) & 0x0f, newLevel & 0x0f);
 
                         long hash = Hash.hashBlock(((int) pos.x), ((int) pos.y), ((int) pos.z));
                         if (newLevel < oldLevel) {
@@ -1976,14 +1953,16 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
 
     public EntityItem dropAndGetItem(Vector3 source, Item item, Vector3 motion, boolean dropAround, int delay) {
         if (item.getId() != 0 && item.getCount() > 0) {
+            ThreadLocalRandom random = ThreadLocalRandom.current();
+
             if (motion == null) {
                 if (dropAround) {
-                    float f = ThreadLocalRandom.current().nextFloat() * 0.5f;
-                    float f1 = ThreadLocalRandom.current().nextFloat() * 6.2831855f;
+                    float f = random.nextFloat() * 0.5f;
+                    float f1 = random.nextFloat() * 6.2831855f;
 
                     motion = new Vector3(-MathHelper.sin(f1) * f, 0.20000000298023224, MathHelper.cos(f1) * f);
                 } else {
-                    motion = new Vector3(ThreadLocalRandom.current().nextDouble() * 0.2 - 0.1, 0.2, ThreadLocalRandom.current().nextDouble() * 0.2 - 0.1);
+                    motion = new Vector3(random.nextDouble() * 0.2 - 0.1, 0.2, random.nextDouble() * 0.2 - 0.1);
                 }
             }
 
@@ -1999,7 +1978,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
                                     .add(new DoubleTag("", motion.y)).add(new DoubleTag("", motion.z)))
 
                             .putList(new ListTag<FloatTag>("Rotation")
-                                    .add(new FloatTag("", ThreadLocalRandom.current().nextFloat() * 360))
+                                    .add(new FloatTag("", random.nextFloat() * 360))
                                     .add(new FloatTag("", 0)))
 
                             .putShort("Health", 5).putCompound("Item", itemTag).putShort("PickupDelay", delay));
@@ -2216,7 +2195,9 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
     public void dropExpOrb(Vector3 source, int exp, Vector3 motion, int delay) {
         if (exp > 0) {
             Random rand = ThreadLocalRandom.current();
-            for (int split : EntityXPOrb.splitIntoOrbSizes(exp)) {
+            while (exp > 0) {
+                int split = EntityXPOrb.getMaxOrbSize(exp);
+                exp -= split;
                 CompoundTag nbt = Entity.getDefaultNBT(source, motion == null ? new Vector3(
                                 (rand.nextDouble() * 0.2 - 0.1) * 2,
                                 rand.nextDouble() * 0.4,
@@ -2441,7 +2422,8 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
 
     public boolean isInSpawnRadius(Vector3 vector3) {
         Vector3 spawn;
-        return server.getSpawnRadius() > -1 && new Vector2(vector3.x, vector3.z).distance(new Vector2((spawn = this.provider.getSpawn()).x, spawn.z)) <= server.getSpawnRadius();
+        return server.getSpawnRadius() > -1 &&
+                new Vector2(vector3.x, vector3.z).distanceSquared((spawn = this.provider.getSpawn()).x, spawn.z) <= (server.getSpawnRadius() * server.getSpawnRadius());
     }
 
     public Entity getEntity(long entityId) {
@@ -3547,11 +3529,7 @@ public class Level implements ChunkManager, Metadatable, GeneratorTaskFactory {
             long index = entry.getKey();
             if (!this.unloadQueue.containsKey(index)) {
                 FullChunk chunk = entry.getValue();
-                int X = chunk.getX();
-                int Z = chunk.getZ();
-                if (!this.isSpawnChunk(X, Z)) {
-                    this.unloadChunkRequest(X, Z, true);
-                }
+                this.unloadChunkRequest(chunk.getX(), chunk.getZ(), true);
             }
         }
 

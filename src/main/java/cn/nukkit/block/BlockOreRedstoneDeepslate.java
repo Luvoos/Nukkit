@@ -11,7 +11,7 @@ public class BlockOreRedstoneDeepslate extends BlockOreRedstone {
     @Override
     public int onUpdate(int type) {
         if (type == Level.BLOCK_UPDATE_TOUCH) {
-            this.getLevel().setBlock(this, Block.get(LIT_DEEPSLATE_REDSTONE_ORE), false, false);
+            this.getLevel().setBlock(this, Block.get(LIT_DEEPSLATE_REDSTONE_ORE), false, true);
             this.getLevel().scheduleUpdate(this, 600);
 
             return Level.BLOCK_UPDATE_WEAK;
@@ -36,6 +36,6 @@ public class BlockOreRedstoneDeepslate extends BlockOreRedstone {
 
     @Override
     public BlockColor getColor() {
-        return BlockColor.DEEPSLATE_GRAY;
+        return BlockColor.DEEPSLATE_GRAY_BLOCK_COLOR;
     }
 }
